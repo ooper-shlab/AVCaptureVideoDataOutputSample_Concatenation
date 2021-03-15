@@ -21,135 +21,151 @@ class VideoWriter : NSObject {
     
     var delegate: VideoWriterDelegate?
     
-    fileprivate var writer: AVAssetWriter!
-    fileprivate var videoInput: AVAssetWriterInput!
-    fileprivate var audioInput: AVAssetWriterInput!
+    //# 初期化でエラーが起こると`writer`がnilのインスタンスができると言う点は踏襲する
+    fileprivate var writer: AVAssetWriter?
+    //# 初期化時に必ず非nilの値が与えられるため、非Optionalとする
+    fileprivate let videoInput: AVAssetWriterInput
+    fileprivate let audioInput: AVAssetWriterInput
     
-    fileprivate var lastTime: CMTime! // 最後に保存したデータのPTS
-    fileprivate var offsetTime = kCMTimeZero // オフセットPTS(開始を0とする)
+    //# Implicitly Unwrapped Optionalとするには危険なため初期値を与える
+    fileprivate var lastTime: CMTime = .zero // 最後に保存したデータのPTS
+    fileprivate var offsetTime = CMTime.zero // オフセットPTS(開始を0とする)
 
-    fileprivate var recordingTime:Int64 = 0 // 録画時間
+    fileprivate var recordingTime: Int64 = 0 // 録画時間
     
     fileprivate enum Status {
-        case Start // 初期化時
-        case Write // 書き込み中
-        case Pause // 一時停止
-        case Restart // 一時停止からの復帰
-        case End // データ保存完了
+        case start // 初期化時
+        case write // 書き込み中
+        case pause // 一時停止
+        case restart // 一時停止からの復帰
+        case end // データ保存完了
     }
     
-    fileprivate var status = Status.Start
+    fileprivate var status = Status.start
     
-    init(height:Int, width:Int, channels:Int, samples:Float64, recordingTime:Int64){
+    init(height: Int,
+         width: Int,
+         channels: Int,
+         samples: Float64,
+         recordingTime: Int64
+    ) {
         
         self.recordingTime = recordingTime
         
         // データ保存のパスを生成
-        let paths = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true)
-        let documentsDirectory = paths[0] as String
-        let filePath : String? = "\(documentsDirectory)/temp.mov"
-        if FileManager.default.fileExists(atPath: filePath!) {
-            try? FileManager.default.removeItem(atPath: filePath!)
+        let urls = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)
+        let documentsDirectoryUrl = urls[0]
+        let fileUrl = documentsDirectoryUrl.appendingPathComponent("temp.mov")
+        if FileManager.default.fileExists(atPath: fileUrl.path) {
+            do {
+                try FileManager.default.removeItem(at: fileUrl)
+            } catch {
+                print(error)
+            }
         }
 
         // AVAssetWriter生成
-        writer = try? AVAssetWriter(outputURL: URL(fileURLWithPath: filePath!), fileType: AVFileTypeQuickTimeMovie)
+        do {
+            writer = try AVAssetWriter(outputURL: fileUrl, fileType: .mov)
+        } catch {
+            print(error)
+        }
         
         // Video入力
-        let videoOutputSettings: Dictionary<String, AnyObject> = [
-            AVVideoCodecKey : AVVideoCodecH264 as AnyObject,
-            AVVideoWidthKey : width as AnyObject,
-            AVVideoHeightKey : height as AnyObject
+        let videoOutputSettings: [String: Any] = [
+            AVVideoCodecKey : AVVideoCodecType.h264.rawValue,
+            AVVideoWidthKey : width,
+            AVVideoHeightKey : height
         ];
-        videoInput = AVAssetWriterInput(mediaType: AVMediaTypeVideo, outputSettings: videoOutputSettings)
+        videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoOutputSettings)
         videoInput.expectsMediaDataInRealTime = true
-        writer.add(videoInput)
+        writer?.add(videoInput)
         
         // Audio入力
-        let audioOutputSettings: Dictionary<String, AnyObject> = [
-            AVFormatIDKey : kAudioFormatMPEG4AAC as AnyObject,
-            AVNumberOfChannelsKey : channels as AnyObject,
-            AVSampleRateKey : samples as AnyObject,
-            AVEncoderBitRateKey : 128000 as AnyObject
+        let audioOutputSettings: [String: Any] = [
+            AVFormatIDKey : kAudioFormatMPEG4AAC,
+            AVNumberOfChannelsKey : channels,
+            AVSampleRateKey : samples,
+            AVEncoderBitRateKey : 128000
         ]
-        audioInput = AVAssetWriterInput(mediaType: AVMediaTypeAudio, outputSettings: audioOutputSettings)
+        audioInput = AVAssetWriterInput(mediaType: .audio, outputSettings: audioOutputSettings)
         audioInput.expectsMediaDataInRealTime = true
-        writer.add(audioInput)
+        writer?.add(audioInput)
     }
     
-    func RecodingTime() -> CMTime {
+    func recodingTime() -> CMTime {
         return CMTimeSubtract(lastTime, offsetTime)
     }
     
-    func write(sampleBuffer: CMSampleBuffer, isVideo: Bool){
+    func write(sampleBuffer: CMSampleBuffer, isVideo: Bool) {
         
-        if status == .Start || status == .End || status == .Pause {
+        if status == .start || status == .end || status == .pause {
             return
         }
 
         // 一時停止から復帰した場合は、一時停止中の時間をoffsetTimeに追加する
-        if status == .Restart {
+        if status == .restart {
             let timeStamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer) // 今取得したデータの時間
             let spanTime = CMTimeSubtract(timeStamp, lastTime) // 最後に取得したデータとの差で一時停止中の時間を計算する
             offsetTime = CMTimeAdd(offsetTime, spanTime) // 一時停止中の時間をoffsetTimeに追加する
-            status = .Write
+            status = .write
         }
         
         if CMSampleBufferDataIsReady(sampleBuffer) {
 
             // 開始直後は音声データのみしか来ないので、最初の動画が来てから書き込みを開始する
-            if isVideo && writer.status == .unknown {
+            if isVideo && writer?.status == .unknown {
                 offsetTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer) // 開始時間を0とするために、開始時間をoffSetに保存する
                 writer?.startWriting()
-                writer?.startSession(atSourceTime: kCMTimeZero) // 開始時間を0で初期化する
+                writer?.startSession(atSourceTime: .zero) // 開始時間を0で初期化する
             }
             
-            if writer.status == .writing {
+            if writer?.status == .writing {
                 
                 // PTSの調整（offSetTimeだけマイナスする）
                 var copyBuffer : CMSampleBuffer?
                 var count: CMItemCount = 1
                 var info = CMSampleTimingInfo()
-                CMSampleBufferGetSampleTimingInfoArray(sampleBuffer, count, &info, &count)
+                CMSampleBufferGetSampleTimingInfoArray(sampleBuffer, entryCount: count, arrayToFill: &info, entriesNeededOut: &count)
                 info.presentationTimeStamp = CMTimeSubtract(info.presentationTimeStamp, offsetTime)
-                CMSampleBufferCreateCopyWithNewTiming(kCFAllocatorDefault,sampleBuffer,1,&info,&copyBuffer)
+                CMSampleBufferCreateCopyWithNewTiming(allocator: kCFAllocatorDefault,sampleBuffer: sampleBuffer,sampleTimingEntryCount: 1,sampleTimingArray: &info,sampleBufferOut: &copyBuffer)
                 
                 lastTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer) // 最後のデータの時間を記録する
-                if RecodingTime() > CMTimeMake(Int64(recordingTime), 1) {
-                    self.writer.finishWriting(completionHandler: {
+                if recodingTime() > CMTimeMake(value: Int64(recordingTime), timescale: 1) {
+                    self.writer?.finishWriting(completionHandler: {
                         DispatchQueue.main.async {
-                            self.delegate?.finishRecording(fileUrl: self.writer.outputURL) // 録画終了
+                            self.delegate?.finishRecording(fileUrl: self.writer!.outputURL) // 録画終了
                         }
                     })
-                    status = .End
+                    status = .end
                     return
                 }
 
                 if isVideo {
-                    if (videoInput?.isReadyForMoreMediaData)! {
-                        videoInput?.append(copyBuffer!)
+                    if videoInput.isReadyForMoreMediaData {
+                        videoInput.append(copyBuffer!)
                     }
-                }else{
-                    if (audioInput?.isReadyForMoreMediaData)! {
-                        audioInput?.append(copyBuffer!)
+                } else {
+                    if audioInput.isReadyForMoreMediaData {
+                        audioInput.append(copyBuffer!)
                     }
                 }
-                delegate?.changeRecordingTime(s: RecodingTime().value) // 録画時間の更新
+                delegate?.changeRecordingTime(s: recodingTime().value) // 録画時間の更新
             }
         }
     }
     
-    func pause(){
-        if status == .Write {
-            status = .Pause
+    func pause() {
+        if status == .write {
+            status = .pause
         }
     }
     
-    func start(){
-        if status == .Start {
-            status = .Write
-        } else if status == .Pause {
-            status = .Restart // 一時停止中の時間をPauseTimeに追加するためのステータス
+    func start() {
+        if status == .start {
+            status = .write
+        } else if status == .pause {
+            status = .restart // 一時停止中の時間をPauseTimeに追加するためのステータス
         }
     }
 }

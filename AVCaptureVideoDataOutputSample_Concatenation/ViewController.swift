@@ -16,9 +16,9 @@ class ViewController: UIViewController, VideoDelegate {
     @IBOutlet weak var previewView: UIImageView!
     @IBOutlet weak var progressView: UIProgressView!
 
-    fileprivate var recordingTime:Int64 = 6 // 録画時間(秒)
+    fileprivate var recordingTime: Int64 = 6 // 録画時間(秒)
 
-    var video: Video?
+    var video: Video! //# `viewDidLoad()`中で必ず非nilに初期化される
     
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -34,8 +34,13 @@ class ViewController: UIViewController, VideoDelegate {
         progressView.progress = 0
         
         video = Video()
-        video?.delegate = self
-        video?.setup(previewView: previewView, recordingTime: recordingTime)
+        video.delegate = self
+        do {
+            try video.setup(previewView: previewView, recordingTime: recordingTime)
+        } catch {
+            print(error)
+            recordingButton.isEnabled = false
+        }
     }
     
     override func didReceiveMemoryWarning() {
@@ -44,13 +49,13 @@ class ViewController: UIViewController, VideoDelegate {
     }
 
     @IBAction func touchDownRecordingButton(_ sender: Any) {
-        if (video?.start())! {
+        if video.start() {
             progressView.isHidden = false
         }
     }
     
     @IBAction func touchUpRecordingButton(_ sender: Any) {
-        video?.pause()
+        video.pause()
     }
     
     // 録画時間の更新
@@ -59,30 +64,30 @@ class ViewController: UIViewController, VideoDelegate {
     }
     
     // 録画終了
-    func finishRecording(fileUrl: URL,completionHandler: @escaping ()->Swift.Void) {
+    func finishRecording(fileUrl: URL,completionHandler: @escaping ()->Void) {
         progressView.isHidden = true
         progressView.progress = 0
         print(fileUrl)
         
         let alertController = UIAlertController(title: "撮影を完了しました", message: "保存しますか？", preferredStyle: .alert)
-        alertController.addAction(UIAlertAction(title: "はい", style: .default, handler:{
-            (action: UIAlertAction!) -> Void in
+        alertController.addAction(UIAlertAction(title: "はい", style: .default) {
+            (action: UIAlertAction) -> Void in
             PHPhotoLibrary.shared().performChanges({
                 PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: fileUrl)
             }) { completed, error in
                 if completed {
                     print("Video is saved!")
                 }
-                if (error != nil) {
+                if let error = error {
                     print("ERROR=\(error)")
                 }
                 completionHandler()
             }
-        }))
-        alertController.addAction(UIAlertAction(title: "いいえ", style: .cancel, handler:{
-            (action: UIAlertAction!) -> Void in
+        })
+        alertController.addAction(UIAlertAction(title: "いいえ", style: .cancel) {
+            (action: UIAlertAction) -> Void in
             completionHandler()
-        }))
+        })
         present(alertController, animated: true, completion: nil)
 
     }

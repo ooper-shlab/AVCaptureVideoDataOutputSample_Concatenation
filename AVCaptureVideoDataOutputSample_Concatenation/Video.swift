@@ -14,27 +14,34 @@ protocol VideoDelegate {
     // 録画時間の更新
     func changeRecordingTime(s: Int64)
     // 録画終了
-    func finishRecording(fileUrl: URL, completionHandler: @escaping ()->Swift.Void)
+    func finishRecording(fileUrl: URL, completionHandler: @escaping ()->Void)
 }
 
 
-class Video : NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate, VideoWriterDelegate {
+class Video: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureAudioDataOutputSampleBufferDelegate, VideoWriterDelegate {
 
     var delegate: VideoDelegate?
-    fileprivate var recordingTime:Int64 = 0 // 録画時間(秒)
+    fileprivate var recordingTime: Int64 = 0 // 録画時間(秒)
     
     fileprivate var videoWriter: VideoWriter?
 
     // HD (iPhone5S)
-    let height:Int = 1280
-    let width:Int = 789
-    let sessionPreset = AVCaptureSessionPreset1280x720
+    let height: Int = 1280
+    let width: Int = 789 //# なぜ789なのか不明、一応動くのでそのまま
+    let sessionPreset = AVCaptureSession.Preset.hd1280x720
 //    Full HD (iPhone6)
 //    let height:Int = 1980
 //    let width:Int = 1080
 //    let sessionPreset = AVCaptureSessionPreset1980x1080
     
-    func setup(previewView: UIImageView, recordingTime: Int64) {
+    private enum SetupError: Error {
+        case noVideoDevice
+        case noAudioDevice
+        case noVideoConnection
+    }
+
+    //# 途中で失敗したら意味のない処理なので、throwsにする
+    func setup(previewView: UIImageView, recordingTime: Int64) throws {
         
         self.recordingTime = recordingTime
         
@@ -42,14 +49,18 @@ class Video : NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureA
         let captureSession = AVCaptureSession()
         
         // 入力（背面カメラ）
-        let videoDevice = AVCaptureDevice.defaultDevice(withMediaType: AVMediaTypeVideo)
-        videoDevice?.activeVideoMinFrameDuration = CMTimeMake(1, 30)// フレームレート １/30秒
-        let videoInput = try! AVCaptureDeviceInput.init(device: videoDevice)
+        guard let videoDevice = AVCaptureDevice.default(for: .video) else {
+            throw SetupError.noVideoDevice
+        }
+        videoDevice.activeVideoMinFrameDuration = CMTimeMake(value: 1, timescale: 30) // フレームレート １/30秒
+        let videoInput = try AVCaptureDeviceInput(device: videoDevice)
         captureSession.addInput(videoInput)
         
         // 入力（マイク）
-        let audioDevice = AVCaptureDevice.defaultDevice(withMediaType: AVMediaTypeAudio)
-        let audioInput = try! AVCaptureDeviceInput.init(device: audioDevice)
+        guard let audioDevice = AVCaptureDevice.default(for: .audio) else {
+            throw SetupError.noAudioDevice
+        }
+        let audioInput = try AVCaptureDeviceInput(device: audioDevice)
         captureSession.addInput(audioInput);
         
         // 出力（映像）
@@ -63,7 +74,9 @@ class Video : NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureA
         captureSession.addOutput(videoDataOutput)
         
         // カメラの方向をポートレートに固定する(AVCaptureSessionに追加後でないと処理できない)
-        let videoConnection:AVCaptureConnection = (videoDataOutput.connection(withMediaType: AVMediaTypeVideo))!
+        guard let videoConnection = videoDataOutput.connection(with: .video) else {
+            throw SetupError.noVideoConnection
+        }
         videoConnection.videoOrientation = .portrait
         
         // 出力(音声)
@@ -75,11 +88,10 @@ class Video : NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureA
         captureSession.sessionPreset = sessionPreset
         
         // プレビュー
-        if let videoLayer = AVCaptureVideoPreviewLayer.init(session: captureSession) {
-            videoLayer.frame = previewView.bounds
-            videoLayer.videoGravity = AVLayerVideoGravityResizeAspectFill
-            previewView.layer.addSublayer(videoLayer)
-        }
+        let videoLayer = AVCaptureVideoPreviewLayer(session: captureSession)
+        videoLayer.frame = previewView.bounds
+        videoLayer.videoGravity = AVLayerVideoGravity.resizeAspectFill
+        previewView.layer.addSublayer(videoLayer)
         
         // セッションの開始
         DispatchQueue.global(qos: .userInitiated).async {
@@ -87,7 +99,7 @@ class Video : NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureA
         }
     }
     
-    func start() -> Bool{
+    func start() -> Bool {
         if videoWriter != nil {
             videoWriter?.start()
             return true
@@ -99,7 +111,8 @@ class Video : NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureA
         videoWriter?.pause()
     }
     
-    func captureOutput(_ captureOutput: AVCaptureOutput!, didOutputSampleBuffer sampleBuffer: CMSampleBuffer!, from connection: AVCaptureConnection!) {
+    //# Swift 4以降ではシグニチャが変わっているので注意
+    func captureOutput(_ captureOutput: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
 
         let isVideo = captureOutput is AVCaptureVideoDataOutput
         if videoWriter == nil {
@@ -115,9 +128,7 @@ class Video : NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureA
             }
         }
 
-        if videoWriter != nil {
-            videoWriter?.write(sampleBuffer: sampleBuffer, isVideo: isVideo)
-        }
+        videoWriter?.write(sampleBuffer: sampleBuffer, isVideo: isVideo)
     }
 
     // 録画時間の更新
@@ -127,7 +138,7 @@ class Video : NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureA
     
     // 録画終了
     func finishRecording(fileUrl: URL) {
-        delegate?.finishRecording(fileUrl: fileUrl,completionHandler: { () in
+        delegate?.finishRecording(fileUrl: fileUrl, completionHandler: {
             self.videoWriter = nil
         })
     }
